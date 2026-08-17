@@ -14,8 +14,8 @@
 ### 포함
 
 - 한국어 HR FAQ와 서식 링크·작성 방법 안내
-- 텍스트 PDF 10개, DOCX 5개, 승인된 웹 FAQ 스냅샷 약 200건
-- 본문과 표 파싱; 문서명·페이지·조항·원본 링크 인용
+- 원본 텍스트 PDF 10개와 DOCX 5개를 앱 밖 오프라인 절차에서 변환·검수한 TXT/MD snapshot, 승인된 웹 FAQ CSV/JSON 약 200건
+- 승인 snapshot 본문 파싱; 원본 문서명·페이지·조항·원본 링크 metadata 인용
 - 최근 5턴의 세션 내 대화 문맥
 - 채팅 검증, 문서 현황, 평가 결과의 Streamlit 3탭
 - 후보 지식 인덱스 평가, 승인, 이전 승인본 rollback
@@ -157,7 +157,7 @@ data/inbox
   -> 이전 approved를 retired로 보존
 ```
 
-- 입력은 PDF, DOCX, CSV, JSON과 제한된 HTML snapshot만 허용한다.
+- 앱 입력은 HR이 checksum으로 승인한 UTF-8 TXT, MD, CSV, JSON snapshot만 허용한다. PDF, DOCX와 HTML은 앱 밖 오프라인 절차에서 변환·검수하며 runtime ingestion에서 즉시 거절한다.
 - `metadata.csv`는 제목, 원본 URI, 우선순위, 시행일, 만료일과 공개 등급을 관리한다.
 - candidate는 평가 시작 후 immutable이다.
 - 승인 시 manifest, 문서, 모델·청킹 설정 hash와 `evaluation_run_id`를 함께 검증한다.
@@ -165,7 +165,7 @@ data/inbox
 - rollback 전 문서 효력, 취소 상태, 공개 등급과 manifest hash를 다시 검사한다.
 - 보안상 취소된 인덱스는 rollback할 수 없다.
 
-비신뢰 문서 파싱은 API나 port를 열지 않는 disposable subprocess에서 수행한다. worker는 별도 parser OS 계정 또는 Windows restricted token으로 실행하고, ACL이 적용된 scratch의 입력 복사본 하나만 읽고 지정 출력 디렉터리만 쓸 수 있다. corpus, LanceDB, 모델과 앱 설정 경로 접근을 거부하고 Windows Firewall로 network를 차단한다. parent는 출력이 scratch 내부의 일반 파일인지, 크기 제한과 JSON schema를 만족하는지 확인한 뒤에만 가져온다. wall-clock·resource 한도를 넘으면 process tree를 종료하고 candidate 전체를 실패시킨다. 이 격리는 “컴포넌트 간 API 연결 없음” 정의를 바꾸지 않는다.
+로드맵 B 앱은 UTF-8 TXT/MD를 렌더링·실행하지 않는 일반 텍스트로 읽고, `question,answer` exact FAQ schema의 CSV/JSON만 stdlib로 직접 읽는다. MD의 HTML, 링크, 이미지, include 표기는 실행하거나 외부에서 가져오지 않고 원문 문자열로만 취급한다. source bytes를 한 번만 읽고 동일 bytes로 크기, 승인 checksum, encoding, NUL byte와 schema를 fail-closed로 검증하며 CLI도 inbox와 checksum을 필수로 받는다. `policy_subject`는 FAQ 본문에 넣지 않고 parser 논리 위치에 대응하는 승인 sidecar에서 결합한다. raw PDF/DOCX/HTML parser와 parser 전용 OS 계정은 제품 경로에 두지 않는다. Windows DNS Client가 사용자별 Firewall 규칙을 우회한 실측 결과 때문에 rich-document 자동 파싱은 zero-network AppContainer가 도입되는 후속 단계까지 금지한다.
 
 로드맵 B는 process lock 아래 동일 volume의 임시 active-pointer 파일을 쓰고 flush한 뒤 atomic replace한다. replace 전에 중단되면 기존 approved가 유지된다. 승인과 rollback은 `expected_current_index_id`와 `expected_manifest_hash`를 비교하는 compare-and-swap(CAS)으로 동시 변경을 거절한다. 로드맵 A는 database transaction, row lock과 “활성 인덱스 최대 하나” 제약으로 같은 계약을 보장한다.
 
@@ -192,7 +192,7 @@ data/inbox
 - 자동 검사는 citation allowlist와 정규화된 날짜·금액·일수·비율의 exact match를 담당한다.
 - 조건 누락과 의미적 정답성은 HR 평가자가 rubric으로 판정한다.
 - 인용의 문서명·위치·URL은 모델 출력 대신 신뢰 저장소에서 재구성한다.
-- `source_uri`는 `ALLOWED_SOURCE_HOSTS`에 등록된 HTTPS host만 클릭 가능한 링크로 표시한다. 로드맵 B의 로컬 PDF/DOCX는 링크 대신 문서명·페이지·조항과 inbox 내 논리 위치만 표시한다.
+- `source_uri`는 `ALLOWED_SOURCE_HOSTS`에 등록된 HTTPS host만 클릭 가능한 링크로 표시한다. 로드맵 B의 로컬 TXT/MD snapshot은 본문 안의 Markdown 링크를 활성화하지 않고 원본 문서명·페이지·조항 metadata와 inbox 내 논리 위치를 표시한다.
 - 근거가 부족하거나 검증이 실패하면 생성 답변을 폐기한다.
 
 모델 장애 시 유효한 검색 원문과 출처만 “답변 생성 불가” 상태로 표시한다. 유효한 원문도 없으면 안전 거절하고 공식 문의 경로를 안내한다.
@@ -290,9 +290,9 @@ src/hr_chatbot/
 
 ## 10. 테스트 전략
 
-### Parser 골든 테스트
+### Snapshot parser 골든 테스트
 
-일반 본문, 다단 문서, 페이지 경계, 표, 병합 셀, 머리말·꼬리말을 검증한다. 손상 PDF, DOCX ZIP bomb, 경로 탈출, 암호화 문서, 형식 불일치를 거절한다.
+TXT/MD 문단 경계와 CSV/JSON FAQ를 검증한다. MD는 Markdown·HTML을 렌더링하거나 링크·이미지·include를 가져오지 않는다. PDF/DOCX/HTML, 비 UTF-8, NUL byte, unknown field, 경로 탈출, symlink/reparse point와 예약 장치명을 거절한다. 원본 페이지·조항은 오프라인 변환 시 승인 metadata로 보존한다.
 
 ### 모듈 인터페이스 테스트
 
@@ -325,12 +325,11 @@ Streamlit AppTest로 3탭, candidate 구축, 자동 평가, HR 판정·최종 �
 
 ### 문서 파싱
 
-- 기본 제한은 `MAX_DOCUMENT_BYTES=50 MiB`, `MAX_PDF_PAGES=500`, `MAX_DOCX_UNCOMPRESSED_BYTES=200 MiB`, `MAX_DOCX_ENTRIES=5000`, `MAX_COMPRESSION_RATIO=100`, `PARSER_TIMEOUT_SECONDS=120`, `MAX_PARSER_RSS_MIB=1536`이다. 별도 저권한 계정 또는 restricted token이 파일 접근을 제한하고, Windows Job Object 또는 동등한 OS 제한이 process tree의 시간·메모리 한도를 강제한다. 변경 시 경계 테스트와 보안 승인이 필요하다.
-- 확장자, MIME, magic byte와 실제 parser 형식의 일치를 검사한다.
-- DOCM, 실행 파일과 암호화 문서를 거절한다.
-- 파일 크기, 페이지 수, 압축 해제 크기·개수·비율, 파싱 시간과 메모리를 제한한다.
+- 기본 제한은 `MAX_DOCUMENT_BYTES=50 MiB`이며 TXT/MD/CSV/JSON만 허용한다. 변경 시 경계 테스트와 보안 승인이 필요하다.
+- 확장자, UTF-8 encoding, NUL byte와 exact CSV/JSON schema를 검사하며 MD는 일반 텍스트로만 처리한다.
+- PDF, DOCX, DOCM, HTML, archive와 실행 파일을 거절한다.
+- 파일 크기를 제한하고 승인 snapshot checksum 불일치 시 candidate 전체를 실패시킨다.
 - symlink, reparse point, `..`, 절대경로와 예약 장치명을 차단한다.
-- HTML script, style과 event handler를 제거하고 외부 resource를 가져오지 않는다.
 
 ### 데이터 보존
 

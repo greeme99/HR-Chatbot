@@ -4,9 +4,9 @@
 
 **Goal:** 외부 클라우드 API와 컴포넌트 간 localhost API 없이, 단일 HR 평가자가 승인 문서를 색인·평가·승인하고 근거 기반 답변을 검증할 수 있는 Streamlit 로컬 RAG 프로토타입을 만든다.
 
-**Architecture:** Streamlit이 framework-independent Python 모듈을 직접 호출하고, LanceDB local table과 로컬 embedding/GGUF artifact를 사용한다. 비신뢰 문서 파싱만 API나 port가 없는 제한된 Windows subprocess로 격리하며, candidate 평가와 원자적 승인 전환 이후에만 일반 질의에서 검색한다.
+**Architecture:** Streamlit이 framework-independent Python 모듈을 직접 호출하고, LanceDB local table과 로컬 embedding/GGUF artifact를 사용한다. 앱은 HR이 오프라인 변환·검수하고 checksum으로 승인한 TXT/MD/CSV/JSON snapshot만 stdlib로 읽으며, candidate 평가와 원자적 승인 전환 이후에만 일반 질의에서 검색한다.
 
-**Tech Stack:** Python 3.12, Streamlit 1.60.0, LanceDB 0.34.0, sentence-transformers 5.6.1, llama-cpp-python 0.3.34, pdfplumber 0.11.10, python-docx 1.2.0, NumPy 2.5.1, pywin32 312, pytest 9.1.1, Ruff 0.16.0, mypy 2.3.1
+**Tech Stack:** Python 3.12, Streamlit 1.60.0, LanceDB 0.34.0, sentence-transformers 5.6.1, llama-cpp-python 0.3.34, NumPy 2.5.1, pytest 9.1.1, Ruff 0.16.0, mypy 2.3.1
 
 **Spec:** `docs/superpowers/specs/2026-08-17-hr-rag-chatbot-design.md`
 
@@ -16,8 +16,8 @@
 - Python 3.14가 아니라 Python 3.12 x86-64 가상환경을 사용한다.
 - 앱 runtime에서 외부 다운로드, 원격 model ID 조회, `trust_remote_code=True`와 임의 URL fetch를 금지한다.
 - Streamlit은 `127.0.0.1` bind, XSRF 보호, headless mode로만 실행한다.
-- 입력은 `data/inbox`의 PDF, DOCX, CSV, JSON, 제한된 HTML snapshot만 허용하고 UI upload는 만들지 않는다.
-- 파서 한도는 50 MiB, PDF 500쪽, DOCX 압축 해제 200 MiB/5,000 entries/ratio 100, 120초, RSS 1,536 MiB다.
+- 입력은 `data/inbox`의 HR 승인 UTF-8 TXT, MD, CSV, JSON snapshot만 허용하고 UI upload는 만들지 않는다. MD는 렌더링·실행하거나 링크·이미지·include를 가져오지 않는 일반 텍스트로 취급한다. PDF/DOCX/HTML은 앱 밖 오프라인 변환 대상으로만 취급한다.
+- snapshot 한도는 50 MiB이며 경로, reparse point, encoding, NUL byte, exact schema와 승인 checksum을 fail-closed로 검증한다.
 - 질문은 2,000자, history는 최근 5턴이다. 기본 token profile은 4096/3584/512/2304/512, fallback은 2048/1792/256/1024/256이다.
 - 검색은 approved·시행 중·임직원 공개 청크만 Top 5로 반환하고 score 내림차순, `chunk_id` 오름차순으로 동점을 정렬한다.
 - `ALLOWED_SOURCE_HOSTS` 기본값은 빈 목록이며 승인된 HTTPS host만 클릭 가능한 citation으로 만든다.
@@ -76,7 +76,6 @@ src/hr_chatbot/
   adapters/
     __init__.py
     document_parser.py
-    windows_parser_runner.py
     lancedb_store.py
     local_embedder.py
     llama_cpp_generator.py
@@ -86,7 +85,6 @@ tests/
   fixtures/
   test_config_domain.py
   test_document_parser.py
-  test_windows_parser_runner.py
   test_knowledge.py
   test_lancedb_store.py
   test_answering.py
@@ -169,10 +167,7 @@ streamlit==1.60.0
 lancedb==0.34.0
 sentence-transformers==5.6.1
 llama-cpp-python==0.3.34
-pdfplumber==0.11.10
-python-docx==1.2.0
 numpy==2.5.1
-pywin32==312; sys_platform == "win32"
 ```
 
 `requirements-dev.in`에는 `-r requirements.in`, `pytest==9.1.1`, `ruff==0.16.0`, `mypy==2.3.1`, `pip-tools==7.6.0`을 둔다. 승인된 network-enabled 준비 환경의 Python 3.12에서 transitive dependency까지 hash-pinned lock과 wheelhouse를 만든 뒤, 대상 PC에는 검증된 wheelhouse만 반입한다.
@@ -268,105 +263,48 @@ git commit -m "chore: establish roadmap b contracts"
 
 ---
 
-### Task 2: fail-closed 입력 검증과 Windows 격리 parser worker
+### Task 2: HR 승인 snapshot의 fail-closed 입력 검증
+
+**결정 기록:** 2026-08-17 실측에서 parser SID 방화벽은 직접 TCP/UDP를 차단했지만 Windows DNS Client service를 통한 고유 외부 DNS 조회를 막지 못했다. 따라서 로드맵 B는 rich-document parser를 제품 경로에서 제거하고 zero-network AppContainer 도입 전까지 PDF/DOCX/HTML 자동 ingestion을 금지한다.
 
 **Files:**
 - Create: `src/hr_chatbot/adapters/document_parser.py`
-- Create: `src/hr_chatbot/adapters/windows_parser_runner.py`
-- Create: `tests/fixtures/sample.pdf`
-- Create: `tests/fixtures/mismatch.txt.pdf`
-- Create: `tests/fixtures/sample.docx`
-- Create: `tests/fixtures/sample_faq.csv`
 - Create: `tests/test_document_parser.py`
-- Create: `tests/test_windows_parser_runner.py`
 
 **Interfaces:**
-- Consumes: `DocumentVersion`, parser limits from `AppConfig`
-- Produces: `parse_in_worker(source: Path, scratch: Path, limits: ParserLimits) -> ParsedDocument`
-- Produces: worker CLI `python -m hr_chatbot.adapters.document_parser --input data/scratch/job-001/input.pdf --output data/scratch/job-001/output/result.json`
+- Consumes: HR이 오프라인 변환·검수하고 checksum으로 승인한 TXT/MD/CSV/JSON snapshot
+- Produces: `parse_approved_snapshot(source: Path, inbox: Path, expected_sha256: str) -> ParsedDocument`
+- Produces: 선택적 로컬 CLI `python -m hr_chatbot.adapters.document_parser --input data/inbox/policy.txt --inbox data/inbox --sha256 $env:HR_POLICY_SHA256 --output data/state/parsed/policy.json`
 
-- [ ] **Step 1: 형식·경로·archive 제한 실패 테스트를 쓴다**
+- [x] **Step 1: 허용 형식과 경로 실패 테스트를 쓴다**
 
-```python
-@pytest.mark.parametrize("name", ["evil.docm", "CON.pdf", "..\\escape.pdf"])
-def test_rejects_forbidden_names(name: str, tmp_path: Path) -> None:
-    candidate = tmp_path / name
-    if ".." not in name:
-        candidate.write_bytes(b"fixture")
-    with pytest.raises(DocumentRejected):
-        validate_source_path(candidate, tmp_path)
+PDF, DOCX, DOCM, HTML, archive, 예약 장치명, `..`, symlink/reparse point를 즉시 거절한다. TXT/MD는 UTF-8과 NUL byte를, CSV/JSON은 `question`·`answer` exact schema와 unknown field를 검증한다.
 
-
-def test_docx_zip_bomb_ratio_is_rejected(tmp_path: Path) -> None:
-    path = make_docx_zip(tmp_path, compressed=1_000, uncompressed=101_000)
-    with pytest.raises(DocumentRejected, match="compression_ratio"):
-        inspect_docx_archive(path, max_ratio=100)
-```
-
-magic bytes, MIME/extension mismatch, symlink/reparse point, absolute/relative escape, encrypted PDF, `script/style/on*` HTML과 external resource도 각각 부정 fixture로 고정한다.
-
-- [ ] **Step 2: stdlib 검증과 format parser를 구현한다**
+- [x] **Step 2: stdlib snapshot parser를 구현한다**
 
 ```python
-ALLOWED_SUFFIXES = {".pdf", ".docx", ".csv", ".json", ".html"}
-
-
-def validate_source_path(path: Path, inbox: Path) -> Path:
-    if path.suffix.lower() not in ALLOWED_SUFFIXES or path.name.upper().split(".")[0] in WINDOWS_DEVICES:
-        raise DocumentRejected("unsupported_path")
-    if ".." in path.parts or path.is_absolute() and not path.is_relative_to(inbox):
-        raise DocumentRejected("path_escape")
-    resolved = path.resolve(strict=True)
-    if not resolved.is_relative_to(inbox.resolve(strict=True)):
-        raise DocumentRejected("path_escape")
-    if path.is_symlink() or is_windows_reparse_point(path):
-        raise DocumentRejected("reparse_point")
-    return resolved
+ALLOWED_SUFFIXES = {".txt", ".md", ".csv", ".json"}
 ```
 
-PDF는 `pdfplumber`, DOCX는 `python-docx`, CSV/JSON/HTML은 stdlib만 사용한다. 출력 JSON은 `document`, `blocks`, `tables`, `warnings` key 외 필드를 만들지 않고, 표는 header와 row label을 포함한 검색 text 및 Markdown을 함께 저장한다.
+TXT/MD는 빈 줄 기준 문단과 논리 위치를 만든다. MD의 Markdown·HTML 문법은 렌더링하지 않고 링크·이미지·include를 가져오지 않으며 원문 문자열로만 보존한다. CSV/JSON은 FAQ block으로 정규화한다. 승인 경계는 source bytes를 한 번만 읽고 동일 bytes로 크기·checksum·encoding·본문을 검증하며, CLI도 필수 `--inbox`와 `--sha256`을 받아 이 경계를 우회하지 않는다. runtime parser는 network, subprocess, archive, PDF/DOCX/HTML dependency를 호출하지 않는다.
 
-- [ ] **Step 3: worker 출력 schema와 부분 성공 금지 테스트를 쓴다**
-
-```python
-def test_worker_timeout_discards_all_output(fake_launcher: FakeLauncher, tmp_path: Path) -> None:
-    fake_launcher.result = LaunchResult(timed_out=True, exit_code=None)
-    with pytest.raises(ParseFailed, match="timeout"):
-        parse_in_worker(SAMPLE_PDF, tmp_path, DEFAULT_LIMITS, launcher=fake_launcher)
-    assert list(tmp_path.glob("accepted/*.json")) == []
-```
-
-- [ ] **Step 4: restricted token과 Job Object launcher를 구현한다**
-
-`windows_parser_runner.py`는 pywin32로 현재 process token의 privileges를 제거한 restricted token을 만들고, Job Object에 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, process memory 1,536 MiB와 120초 wall clock kill을 적용한다. scratch ACL은 현재 앱 SID와 restricted worker SID만 허용한다. worker에는 scratch input copy와 output directory만 넘기고 corpus/LanceDB/model/config 경로 handle은 상속하지 않는다.
-
-```python
-class WindowsParserLauncher:
-    def run(self, command: Sequence[str], scratch: Path, limits: ParserLimits) -> LaunchResult:
-        token = create_restricted_primary_token()
-        job = create_limited_job(memory_mib=limits.max_rss_mib)
-        process = create_suspended_process(token, command, cwd=scratch, inherit_handles=False)
-        assign_to_job(job, process)
-        resume(process)
-        return wait_or_kill_tree(process, job, timeout_seconds=limits.timeout_seconds)
-```
-
-parent는 output path가 scratch 안의 regular file인지, 최대 크기와 exact JSON schema를 만족하는지 확인한 뒤 `ParsedDocument`로 변환한다. Windows security primitive 생성이 실패하면 in-process parsing으로 fallback하지 않고 `sandbox_unavailable`로 candidate 전체를 실패시킨다.
-
-- [ ] **Step 5: parser 단위·Windows 보안 통합 테스트를 실행한다**
+- [x] **Step 3: exact 출력 schema와 회귀 테스트를 실행한다**
 
 ```powershell
 python -m pytest tests/test_document_parser.py -v
-python -m pytest tests/test_windows_parser_runner.py -m windows_security -v
+python -m ruff check src tests
+python -m mypy src/hr_chatbot
 ```
 
-Expected: 정상 fixture의 본문·표 위치가 golden JSON과 일치하고, worker가 corpus/LanceDB/model path를 열거나 DNS socket을 만들려는 probe는 모두 거부된다. timeout/RSS 초과 process tree는 종료되고 accepted output은 0개다.
+Expected: TXT/MD/CSV/JSON 정상 fixture가 결정적으로 파싱되고 금지 형식·encoding·schema·경로 fixture는 모두 fail-closed다.
 
-- [ ] **Step 6: checkpoint를 남긴다**
+- [ ] **Step 4: 기존 parser sandbox를 제거하고 checkpoint를 남긴다**
+
+관리자 teardown으로 실험용 계정, Credential, Firewall rule과 ACL을 제거한 뒤 생성 runtime을 삭제한다. 이후:
 
 ```powershell
-git add src/hr_chatbot/adapters tests/fixtures tests/test_document_parser.py tests/test_windows_parser_runner.py
-git commit -m "feat: isolate untrusted document parsing"
+git add docs/superpowers src/hr_chatbot/adapters/document_parser.py tests/test_document_parser.py
+git commit -m "feat: ingest approved text snapshots"
 ```
 
 ---
@@ -397,7 +335,7 @@ git commit -m "feat: isolate untrusted document parsing"
 ```python
 def test_metadata_requires_one_row_per_input(tmp_path: Path) -> None:
     write_metadata(tmp_path, rows=[])
-    (tmp_path / "policy.pdf").write_bytes(PDF_BYTES)
+    (tmp_path / "policy.txt").write_text("연차 정책", encoding="utf-8")
     with pytest.raises(KnowledgeBuildFailed, match="metadata_missing"):
         load_source_snapshot(tmp_path)
 
@@ -411,17 +349,17 @@ def test_embedder_hash_mismatch_never_loads_model(tmp_path: Path) -> None:
 
 ```csv
 filename,document_id,title,document_kind,source_uri,priority,effective_from,effective_to,access_level
-sample-policy.pdf,leave-policy,휴가 규정,rule,https://docs.example.invalid/hr/leave,300,2026-01-01,,employee
+sample-policy.txt,leave-policy,휴가 규정,rule,https://docs.example.invalid/hr/leave,300,2026-01-01,,employee
 ```
 
-PDF/DOCX/HTML/JSON 문서의 section conflict group은 별도 sidecar로 고정한다.
+모든 snapshot의 section conflict group과 `policy_subject` mapping은 별도 sidecar로 고정한다. `page_or_section`에는 TXT/MD의 승인 조항, CSV의 `row:2`, JSON의 `item:1` 같은 parser 논리 위치를 기록한다.
 
 ```csv
 filename,page_or_section,policy_subject
-sample-policy.pdf,제12조,annual_leave_days
+sample-policy.txt,제12조,annual_leave_days
 ```
 
-FAQ CSV의 각 record는 `question,answer,policy_subject`를 필수 column으로 가진다. candidate build는 `document_kind` enum, priority 범위와 subject ID 형식 `[a-z0-9_]{3,80}`을 검증하고, 날짜·금액·일수·비율이 있는 employee-public chunk에 subject가 매핑되지 않으면 실패한다.
+FAQ CSV/JSON snapshot은 Task 2와 동일하게 `question,answer` exact schema만 허용하고 인라인 `policy_subject` unknown field는 거절한다. candidate build가 별도 `policy_subjects.csv`에서 논리 위치별 subject를 결합한다. `document_kind` enum, priority 범위와 subject ID 형식 `[a-z0-9_]{3,80}`을 검증하고, 날짜·금액·일수·비율이 있는 employee-public chunk에 subject가 매핑되지 않으면 실패한다.
 
 `config/artifacts.example.json`은 schema를 고정하되 실제 경로·hash를 승인된 값처럼 위장하지 않는다.
 
@@ -704,7 +642,7 @@ citations = tuple(Citation.from_trusted_chunk(chunk, self._allowed_source_hosts)
 return AnswerResult.retrieval_only(render_evidence(ranked), ranked, citations, timings)
 ```
 
-로컬 PDF/DOCX citation은 link 대신 논리 위치만 표시하고, HTTPS host allowlist에 없는 URL은 plain text로 표시한다.
+로컬 TXT/MD snapshot citation은 본문 안의 Markdown 링크가 아니라 원본 문서명·페이지·조항 metadata를 표시하고, HTTPS host allowlist에 없는 URL은 plain text로 표시한다.
 
 검색 Top 5의 score 정렬 계약은 바꾸지 않는다. 답변 근거를 만들 때 같은 정책 subject에 서로 다른 정규화 수치·날짜·기간·비율이 있으면 priority가 가장 높은 문서만 남기고, 동률이면 `effective_from`이 최신인 문서를 선택한다. priority와 시행일도 같지만 내용이 충돌하면 생성하지 않고 `validation_failed`로 안전 거절한다. 이 필터를 retrieval-only 표시와 generator evidence 양쪽에 동일 적용한다.
 
@@ -1110,7 +1048,7 @@ git commit -m "feat: add hr evaluator streamlit workspace"
 
 - [ ] **Step 1: 고정 adversarial suite를 테스트로 고정한다**
 
-최소 case는 문서 prompt injection, question prompt injection, 허위 citation ID, 숫자 변조, candidate/partial index query, stale CAS, 중단된 build, 만료·취소 rollback, path escape/ZIP bomb, formula export, DNS/HTTP egress probe다.
+최소 case는 문서 prompt injection, question prompt injection, 허위 citation ID, 숫자 변조, candidate/partial index query, stale CAS, 중단된 build, 만료·취소 rollback, path escape/invalid encoding/schema, formula export, DNS/HTTP egress probe다.
 
 ```python
 def test_adversarial_suite_has_fixed_checksum() -> None:
@@ -1150,7 +1088,7 @@ Expected: retrieval ≥63/70, finalized HR generation ≥60/70, refusal ≥29/30
 
 Windows Firewall에서 앱 Python executable의 outbound를 default-deny하고 Streamlit inbound를 차단한 상태로 DNS/HTTP probe 실패를 기록한다. `Get-NetTCPConnection`으로 listen address가 `127.0.0.1`뿐인지 확인한다. artifact/document/dependency/evaluation checksum과 30일 purge audit/sample recovery 결과를 release manifest에 포함한다. Firewall rule, parser scratch ACL 또는 별도 OS 계정 설정처럼 관리자 권한과 시스템 상태 변경이 필요한 command는 실행 전에 정확한 대상·영향·복구 command를 제시하고 사용자 승인을 받는다. 승인되지 않거나 구성 검증이 실패하면 release gate를 실패 처리한다.
 
-`ReleaseGateReport`는 approved index가 참조한 `CandidateGateReport` hash, 자동 검증 결과, egress/bind/parser sandbox, retention scheduler/audit, 실제 browser checklist와 hardware timing을 한 record로 묶는다. 하나라도 누락/실패면 `passed=False`이며 “Roadmap B 완료” 또는 직원 공개를 주장할 수 없다.
+`ReleaseGateReport`는 approved index가 참조한 `CandidateGateReport` hash, 자동 검증 결과, egress/bind/snapshot allowlist, retention scheduler/audit, 실제 browser checklist와 hardware timing을 한 record로 묶는다. 하나라도 누락/실패면 `passed=False`이며 “Roadmap B 완료” 또는 직원 공개를 주장할 수 없다.
 
 - [ ] **Step 5: runbook을 작성한다**
 
@@ -1159,7 +1097,7 @@ Windows Firewall에서 앱 Python executable의 outbound를 default-deny하고 S
 1. Python 3.12 venv, 검증된 wheelhouse의 `--require-hashes` 설치, `python -m pip install --no-index --find-links wheelhouse --no-build-isolation --no-deps -e .`, import/CLI preflight
 2. approved artifact checksum 검증
 3. `data/inbox` ACL과 metadata 검증
-4. parser sandbox security test
+4. snapshot format·checksum·path security test
 5. candidate build, 100-case run, HR review/finalize, approve/rollback
 6. Streamlit loopback 실행과 firewall 확인
 7. 30일 retention 실행·감사
@@ -1193,7 +1131,7 @@ Expected: 모든 자동 검증 통과. 실제 artifact/corpus/HR review가 없�
 ## 의도적으로 건너뛴 구현
 
 - ANN/FTS/hybrid 검색: exact dense hit@5가 63/70 미만이고 실패 분석이 lexical gap을 입증할 때만 추가한다.
-- OCR/이미지 설명: text PDF 범위를 벗어난다.
+- 앱 내 PDF/DOCX/HTML 파싱, OCR/이미지 설명: zero-network rich-document sandbox 범위를 벗어난다.
 - parser/embedder 공개 Protocol, repository/service/controller 계층: 구현 교체점이 아니므로 만들지 않는다.
 - 다중 사용자 인증·권한·중앙 API: 로드맵 A 계획에서 다룬다.
 - 자동 튜닝과 background queue: 100문항 순차 평가와 단일 HR 평가자 범위에 필요하지 않다.

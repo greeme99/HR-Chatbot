@@ -1,0 +1,21 @@
+[token_profile]
+model_n_ctx = 4096
+max_input_tokens = 3584
+max_history_tokens = 512
+max_evidence_tokens = 2304
+max_output_tokens = 512
+
+[parser_limits]
+max_file_mib = 50
+max_pdf_pages = 500
+max_archive_mib = 200
+max_archive_entries = 5000
+max_compression_ratio = 100
+timeout_seconds = 120
+max_rss_mib = 1536
+
+[retrieval]
+top_k = 5
+
+[sources]
+allowed_hosts = []

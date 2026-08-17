@@ -180,7 +180,7 @@ pywin32==312; sys_platform == "win32"
 ```powershell
 python -m pip install pip-tools==7.6.0
 python scripts/verify_wheelhouse.py --manifest config/wheelhouse-manifest.json --wheelhouse wheelhouse --mode artifacts
-python -m piptools compile requirements-dev.in --find-links wheelhouse --generate-hashes --output-file requirements.lock
+python -m piptools compile requirements-dev.in --find-links wheelhouse --generate-hashes --allow-unsafe --pip-args="--only-binary=llama-cpp-python" --output-file requirements.lock
 python -m pip download --only-binary=:all: --find-links wheelhouse --require-hashes -r requirements.lock --dest wheelhouse
 python scripts/verify_wheelhouse.py --manifest config/wheelhouse-manifest.json --wheelhouse wheelhouse --requirements requirements.lock --mode complete
 python -m pip install --no-index --find-links wheelhouse --require-hashes -r requirements.lock

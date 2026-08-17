@@ -1,0 +1,31 @@
+# Local agent and brainstorming state
+.agents/
+.claude/
+.Codex/
+.superpowers/
+agent/
+
+# Confidential or local HR data
+docs/HR-Rules/
+data/inbox/*
+!data/inbox/*.example.csv
+data/evaluation/*.csv
+!data/evaluation/*.example.csv
+data/lancedb/
+data/state/
+
+# Models, native artifacts, and offline packages
+models/
+wheelhouse/
+*.gguf
+*.whl
+config/artifacts.json
+config/wheelhouse-manifest.json
+
+# Python and tool caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

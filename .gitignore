@@ -24,6 +24,7 @@ config/wheelhouse-manifest.json
 
 # Python and tool caches
 .venv/
+.worktrees/
 __pycache__/
 *.py[cod]
 .pytest_cache/

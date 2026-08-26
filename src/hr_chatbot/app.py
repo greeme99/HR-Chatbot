@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
+import sys
 import streamlit as st
+
+# Ensure src directory is in sys.path for Streamlit Cloud and container environments
+_APP_DIR = Path(__file__).resolve().parent
+_SRC_DIR = _APP_DIR.parent
+_PROJECT_ROOT = _SRC_DIR.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 from hr_chatbot.adapters.document_parser import DocumentParser
 from hr_chatbot.adapters.hybrid_store import HybridVectorStore
@@ -20,8 +28,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-HR_RULES_DIR = Path("docs/HR-Rules")
-CSS_FILE = Path("src/hr_chatbot/style.css")
+HR_RULES_DIR = _PROJECT_ROOT / "docs" / "HR-Rules" if (_PROJECT_ROOT / "docs" / "HR-Rules").exists() else Path("docs/HR-Rules")
+CSS_FILE = _APP_DIR / "style.css"
 
 
 @st.cache_resource(max_entries=1)

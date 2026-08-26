@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hr-chatbot"
+version = "0.1.0"
+description = "MK I&C HR Policy AI Chatbot"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+cache_dir = ".pytest_temp"
+
+[tool.pyright]
+extraPaths = ["src"]

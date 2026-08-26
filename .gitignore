@@ -6,7 +6,6 @@
 agent/
 
 # Confidential or local HR data
-docs/HR-Rules/
 data/inbox/*
 !data/inbox/*.example.csv
 data/evaluation/*.csv
@@ -27,6 +26,8 @@ config/wheelhouse-manifest.json
 .worktrees/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
+.pytest_temp/
 .mypy_cache/
 .ruff_cache/
